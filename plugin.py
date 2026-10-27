@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """MaiBot adapter for Zhalslar/astrbot_plugin_parser core parsers."""
+# ruff: noqa: E402 -- runtime plugin imports follow the plugin path bootstrap.
 from __future__ import annotations
 
 import asyncio
@@ -23,10 +24,12 @@ from .core.config import PluginConfig as CorePluginConfig
 from .core.data import DynamicContent, FileContent, GraphicsContent, ImageContent, ParseResult, TextContent, VideoContent
 from .core.download import Downloader
 from .core.exception import ParseException
+from .core.links import extract_urls, has_incomplete_x_post, message_source
+from .core.x_media import MediaPrepareContext, MediaSettings, cleanup_stale
+from .core.x_text import Translation, XTranslator, post_text_nodes
 from .core.parsers import BaseParser, BilibiliParser
-from .sender import ApiSettings, get_message, image_segment, send_file, send_group_forward, send_image, send_text, send_video, text_segment
+from .sender import embed_local_media, get_message, image_segment, send_file, send_group_forward, send_image, send_text, send_video, text_segment, video_segment
 
-URL_RE = re.compile(r"https?://[^\s\]\)）>\"']+")
 AT_TEXT_RE = re.compile(r"<@!?([^>\s]+)>")
 
 
@@ -35,8 +38,8 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     name: str = Field(default="multi_platform_parser", description="插件名称", json_schema_extra={"hidden": True})
-    config_version: str = Field(default="1.7.4", description="配置文件版本", json_schema_extra={"hidden": True})
-    version: str = Field(default="1.7.4", description="插件版本", json_schema_extra={"hidden": True})
+    config_version: str = Field(default="1.8.0", description="配置文件版本", json_schema_extra={"hidden": True})
+    version: str = Field(default="1.8.0", description="插件版本", json_schema_extra={"hidden": True})
     enabled: bool = Field(default=True, description="是否启用插件", json_schema_extra={"label": "启用插件", "hint": "关闭后插件完全停止工作", "order": 0})
     admin_qqs: list[str] = Field(default_factory=list, description="管理员QQ号列表", json_schema_extra={"label": "管理员QQ号", "hint": "只有管理员可以使用开启/关闭解析和登录B站命令，支持多个QQ号", "order": 1})
 
@@ -57,7 +60,7 @@ class ParserSectionConfig(PluginConfigBase):
     enable_nga: bool = Field(default=True, description="启用NGA解析", json_schema_extra={"label": "NGA", "hint": "开启NGA链接解析", "order": 9})
     enable_shipinhao: bool = Field(default=True, description="启用微信视频号解析", json_schema_extra={"label": "微信视频号", "hint": "开启微信视频号链接解析，需在「更多设置」中开启 shipinhao_confirm_thirdparty 才会实际生效", "order": 10})
     enable_tiktok: bool = Field(default=True, description="启用TikTok解析", json_schema_extra={"label": "TikTok", "hint": "开启TikTok链接解析", "order": 11})
-    enable_twitter: bool = Field(default=True, description="启用Twitter/X解析", json_schema_extra={"label": "Twitter/X", "hint": "开启Twitter/X链接解析，注意：推文链接会被转发到第三方服务 xdown.app 进行解析，需在「更多设置」中开启 twitter_confirm_thirdparty 才会实际生效", "order": 12})
+    enable_twitter: bool = Field(default=True, description="启用Twitter/X解析", json_schema_extra={"label": "Twitter/X", "hint": "开启Twitter/X链接解析，注意：推文链接会被转发到第三方服务 FxTwitter（媒体兜底使用 xdown.app） 进行解析，需在「更多设置」中开启 twitter_confirm_thirdparty 才会实际生效", "order": 12})
     enable_weibo: bool = Field(default=True, description="启用微博解析", json_schema_extra={"label": "微博", "hint": "开启微博链接解析", "order": 13})
     enable_youtube: bool = Field(default=True, description="启用YouTube解析", json_schema_extra={"label": "YouTube", "hint": "开启YouTube链接解析", "order": 14})
     enable_zhihu: bool = Field(default=True, description="启用知乎解析", json_schema_extra={"label": "知乎", "hint": "开启知乎链接解析", "order": 15})
@@ -88,7 +91,7 @@ class MoreSectionConfig(PluginConfigBase):
 
     pixiv_encrypt_image_group: bool = Field(default=True, description="群聊Pixiv图片是否混淆后发送（仅R18/R18G作品）", json_schema_extra={"label": "群聊Pixiv图片混淆", "hint": "开启后，群聊中仅对R18/R18G作品的图片进行像素混淆加密处理，默认开启", "order": 0})
     pixiv_encrypt_image_private: bool = Field(default=False, description="私聊Pixiv图片是否混淆后发送（仅R18/R18G作品）", json_schema_extra={"label": "私聊Pixiv图片混淆", "hint": "开启后，私聊中仅对R18/R18G作品的图片进行像素混淆加密处理，默认关闭", "order": 1})
-    twitter_confirm_thirdparty: bool = Field(default=False, description="Twitter/X第三方服务确认", json_schema_extra={"label": "Twitter第三方确认", "hint": "Twitter解析需将推文链接发送到第三方服务xdown.app，开启此项表示已知悉此风险并同意使用。关闭时即使enable_twitter=true也不会解析Twitter链接", "order": 2})
+    twitter_confirm_thirdparty: bool = Field(default=False, description="Twitter/X第三方服务确认", json_schema_extra={"label": "Twitter第三方确认", "hint": "Twitter解析需将推文链接发送到第三方服务FxTwitter（媒体兜底使用xdown.app），开启此项表示已知悉此风险并同意使用。关闭时即使enable_twitter=true也不会解析Twitter链接", "order": 2})
     shipinhao_confirm_thirdparty: bool = Field(default=False, description="微信视频号第三方服务确认", json_schema_extra={"label": "视频号第三方确认", "hint": "微信视频号解析需将分享链接发送到第三方服务腾讯元宝(yuanbao.tencent.com)，开启此项表示已知悉此风险并同意使用。关闭时即使enable_shipinhao=true也不会解析视频号链接", "order": 3})
     qzone_confirm_thirdparty: bool = Field(default=False, description="QQ空间SnowLuma服务确认", json_schema_extra={"label": "QQ空间SnowLuma确认", "hint": "QQ空间解析需通过 SnowLuma 服务获取登录态凭证（OneBot get_credentials），开启此项表示已知悉并同意。关闭时即使enable_qzone=true也不会解析QQ空间链接", "order": 4})
     metube_confirm: bool = Field(default=False, description="Metube 服务确认", json_schema_extra={"label": "Metube确认", "hint": "Metube 解析会把待解析链接提交到你自建的 Metube 服务处理，开启此项表示已知悉。关闭时即使enable_metube=true也不会解析", "order": 5})
@@ -159,6 +162,55 @@ class ApiConfig(PluginConfigBase):
     bot_uin: str = Field(default="", description="发送合并转发节点时使用的 bot QQ", json_schema_extra={"label": "Bot QQ", "hint": "发送合并转发时使用的机器人QQ号，可选", "order": 3})
 
 
+class TwitterTranslationConfig(PluginConfigBase):
+    __ui_label__ = "X 原文翻译"
+    __ui_order__ = 6
+
+    enabled: bool = Field(default=True, description="启用 X 原文翻译")
+    target_language: str = Field(default="zh-CN", description="目标语言")
+    task_name: str = Field(default="utils", description="MaiBot 模型任务名")
+    timeout_seconds: int = Field(default=25, ge=1, le=120, description="每段翻译超时秒数")
+    chunk_chars: int = Field(default=1600, ge=200, le=3000, description="每段翻译字符数")
+    cache_ttl_seconds: int = Field(default=86400, ge=0, le=604800, description="成功译文缓存秒数")
+    cache_max_entries: int = Field(default=256, ge=1, le=4096, description="成功译文缓存条数")
+
+
+class MediaRandomizerConfig(PluginConfigBase):
+    __ui_label__ = "X 图片预处理"
+    __ui_order__ = 7
+
+    enabled: bool = Field(default=True, description="启用 X 图片预处理", json_schema_extra={"label": "启用 X 图片预处理", "order": 0})
+    cleanup_after_send: bool = Field(default=True, description="发送后删除处理副本", json_schema_extra={"label": "发送后删除处理副本", "order": 1})
+    cleanup_interval_minutes: int = Field(default=60, ge=1, le=1440, description="残留副本清理间隔（分钟）", json_schema_extra={"label": "残留副本清理间隔（分钟）", "order": 2})
+    cleanup_retention_hours: int = Field(default=24, ge=1, le=720, description="残留副本保留时间（小时）", json_schema_extra={"label": "残留副本保留时间（小时）", "order": 3})
+    weight_reencode: int = Field(default=30, ge=0, le=10000, description="重编码权重", json_schema_extra={"label": "重编码权重", "order": 4})
+    weight_border: int = Field(default=20, ge=0, le=10000, description="边框权重", json_schema_extra={"label": "边框权重", "order": 5})
+    weight_crop: int = Field(default=15, ge=0, le=10000, description="裁边权重", json_schema_extra={"label": "裁边权重", "order": 6})
+    weight_canvas: int = Field(default=15, ge=0, le=10000, description="扩展画布权重", json_schema_extra={"label": "扩展画布权重", "order": 7})
+    weight_edge_noise: int = Field(default=10, ge=0, le=10000, description="边缘噪声权重", json_schema_extra={"label": "边缘噪声权重", "order": 8})
+    weight_pixel_noise: int = Field(default=10, ge=0, le=10000, description="像素微调权重", json_schema_extra={"label": "像素微调权重", "order": 9})
+    jpeg_quality: int = Field(default=95, ge=1, le=100, description="JPEG 编码质量", json_schema_extra={"label": "JPEG 编码质量", "order": 10})
+    webp_quality: int = Field(default=95, ge=1, le=100, description="有损 WebP 编码质量", json_schema_extra={"label": "有损 WebP 编码质量", "order": 11})
+    png_compress_level: int = Field(default=6, ge=0, le=9, description="PNG 压缩级别", json_schema_extra={"label": "PNG 压缩级别", "order": 12})
+    border_min_px: int = Field(default=1, ge=1, le=64, description="边框最小像素", json_schema_extra={"label": "边框最小像素", "order": 13})
+    border_max_px: int = Field(default=3, ge=1, le=64, description="边框最大像素", json_schema_extra={"label": "边框最大像素", "order": 14})
+    crop_min_px: int = Field(default=1, ge=1, le=64, description="裁边最小像素", json_schema_extra={"label": "裁边最小像素", "order": 15})
+    crop_max_px: int = Field(default=2, ge=1, le=64, description="裁边最大像素", json_schema_extra={"label": "裁边最大像素", "order": 16})
+    canvas_min_px: int = Field(default=1, ge=1, le=64, description="扩展画布最小像素", json_schema_extra={"label": "扩展画布最小像素", "order": 17})
+    canvas_max_px: int = Field(default=6, ge=1, le=64, description="扩展画布最大像素", json_schema_extra={"label": "扩展画布最大像素", "order": 18})
+    noise_region_px: int = Field(default=2, ge=1, le=64, description="噪声作用的外圈厚度", json_schema_extra={"label": "噪声作用的外圈厚度", "order": 19})
+    edge_noise_min_count: int = Field(default=2, ge=1, le=10000, description="噪声最少像素数", json_schema_extra={"label": "噪声最少像素数", "order": 20})
+    edge_noise_max_count: int = Field(default=20, ge=1, le=10000, description="噪声最多像素数", json_schema_extra={"label": "噪声最多像素数", "order": 21})
+    pixel_noise_min_count: int = Field(default=5, ge=1, le=10000, description="微调最少像素数", json_schema_extra={"label": "微调最少像素数", "order": 22})
+    pixel_noise_max_count: int = Field(default=30, ge=1, le=10000, description="微调最多像素数", json_schema_extra={"label": "微调最多像素数", "order": 23})
+    pixel_noise_delta_min: int = Field(default=1, ge=1, le=255, description="RGB 微调最小幅度", json_schema_extra={"label": "RGB 微调最小幅度", "order": 24})
+    pixel_noise_delta_max: int = Field(default=3, ge=1, le=255, description="RGB 微调最大幅度", json_schema_extra={"label": "RGB 微调最大幅度", "order": 25})
+    max_modified_ratio: float = Field(default=0.001, gt=0, le=1, description="噪声修改像素比例上限", json_schema_extra={"label": "噪声修改像素比例上限", "order": 26})
+    border_color: str = Field(default="随机黑白", description="边框颜色：随机黑白 / 黑 / 白", json_schema_extra={"label": "边框颜色：随机黑白 / 黑 / 白", "order": 27})
+    canvas_background: str = Field(default="随机黑白", description="画布颜色：随机黑白 / 黑 / 白", json_schema_extra={"label": "画布颜色：随机黑白 / 黑 / 白", "order": 28})
+    noise_color: str = Field(default="随机黑白", description="噪声颜色：随机黑白 / 黑 / 白", json_schema_extra={"label": "噪声颜色：随机黑白 / 黑 / 白", "order": 29})
+
+
 class PluginConfig(PluginConfigBase):
     __ui_label__ = "全部配置"
 
@@ -168,18 +220,38 @@ class PluginConfig(PluginConfigBase):
     network: NetworkSectionConfig = Field(default_factory=NetworkSectionConfig)
     cookies: CookieSectionConfig = Field(default_factory=CookieSectionConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
+    twitter_translation: TwitterTranslationConfig = Field(default_factory=TwitterTranslationConfig)
+    media_randomizer: MediaRandomizerConfig = Field(default_factory=MediaRandomizerConfig)
 
 
 class MultiPlatformParserPlugin(MaiBotPlugin):
     """自动解析抖音、小红书、小黑盒等社媒链接。"""
 
     config_model = PluginConfig
-    config_reload_subscriptions: tuple[str, ...] = ()
+    config_reload_subscriptions: tuple[str, ...] = ("model",)
 
     _downloader: Downloader | None = None
     _parsers: list[BaseParser] = []
     _recent: dict[tuple[str, str], float] = {}
     _blacklist: set[str] = set()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._x_translator = XTranslator()
+        self._tasks: set[asyncio.Task] = set()
+        self._x_cleaner: asyncio.Task | None = None
+
+    def _x_media_root(self) -> Path:
+        return self.ctx.paths.data_dir / "temp" / "media_randomizer"
+
+    async def _x_cleanup_loop(self) -> None:
+        while True:
+            settings = self.config.media_randomizer
+            try:
+                await asyncio.to_thread(cleanup_stale, self._x_media_root(), settings.cleanup_retention_hours)
+            except Exception as exc:
+                self.ctx.logger.warning("X image cleanup failed: %s", type(exc).__name__)
+            await asyncio.sleep(settings.cleanup_interval_minutes * 60)
 
     async def on_load(self) -> None:
         if not self.config.plugin.enabled:
@@ -196,8 +268,18 @@ class MultiPlatformParserPlugin(MaiBotPlugin):
         ]
         names = ", ".join(parser.platform.display_name for parser in self._parsers) or "none"
         self.ctx.logger.info("Multi platform parser loaded: %s", names)
+        self._x_cleaner = asyncio.create_task(self._x_cleanup_loop())
 
     async def on_unload(self) -> None:
+        tasks = tuple(self._tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if self._x_cleaner:
+            self._x_cleaner.cancel()
+            await asyncio.gather(self._x_cleaner, return_exceptions=True)
+            self._x_cleaner = None
         for parser in self._parsers:
             await parser.close_session()
         self._parsers = []
@@ -208,6 +290,7 @@ class MultiPlatformParserPlugin(MaiBotPlugin):
 
     async def on_config_update(self, scope: str, config_data: dict[str, object], version: str) -> None:
         del scope, config_data
+        self._x_translator.clear()
         self.ctx.logger.info("Multi platform parser config updated to %s", version)
 
     @HookHandler(
@@ -257,6 +340,13 @@ class MultiPlatformParserPlugin(MaiBotPlugin):
                 break
 
         if not matched:
+            if has_incomplete_x_post(source):
+                if not self._is_recent(session_id, "incomplete-x:" + source):
+                    await self._send_text(
+                        "这条 X 链接被截断或不完整，请发送完整链接。",
+                        str(kwargs.get("stream_id", "") or ""), message,
+                    )
+                return {"action": "abort"} if self.config.parser.block_ai_reply else None
             return None
 
         parser, keyword, searched, url = matched
@@ -266,7 +356,9 @@ class MultiPlatformParserPlugin(MaiBotPlugin):
 
         self.ctx.logger.info("Multi platform link detected: %s %s", parser.platform.display_name, url)
         stream_id = str(kwargs.get("stream_id", "") or "")
-        asyncio.create_task(self._process_task(parser, keyword, searched, url, message, stream_id))
+        task = asyncio.create_task(self._process_task(parser, keyword, searched, url, message, stream_id))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
         if self.config.parser.block_ai_reply:
             return {"action": "abort"}
@@ -290,6 +382,9 @@ class MultiPlatformParserPlugin(MaiBotPlugin):
             await self._send_text(f"这个链接解析失败了：{exc}", stream_id, message)
 
     async def _send_result(self, message: dict[str, Any], result: ParseResult, stream_id: str) -> None:
+        if result.platform.name == "twitter":
+            await self._send_x_result(message, result, stream_id)
+            return
         header = self._format_header(result)
         text_nodes: list[list[dict[str, Any]]] = []
         media_items = self._flatten_contents(result)
@@ -336,15 +431,7 @@ class MultiPlatformParserPlugin(MaiBotPlugin):
                 self.ctx.logger.warning("合并转发失败，回退为逐条发送")
 
         if not sent_forward:
-            if header:
-                await self._send_text(header, stream_id, message)
-            for node in image_nodes:
-                segment = node[0]
-                if segment.get("type") == "text":
-                    await self._send_text(segment["data"]["text"], stream_id, message)
-                elif segment.get("type") == "image":
-                    path = self._path_from_file_segment(segment)
-                    await self._send_image(path, stream_id, message)
+            await self._send_nodes_individually(nodes, stream_id, message)
 
         if self.config.parser.send_video:
             for video in videos[:1]:
@@ -360,6 +447,85 @@ class MultiPlatformParserPlugin(MaiBotPlugin):
             decrypt_url = "https://nj-1307802825.cos-website.ap-nanjing.myqcloud.com/hunxiao//"
             decrypt_msg = f"图片已混淆加密，访问 {decrypt_url} 上传图片即可解除混淆查看原图"
             await self._send_text(decrypt_msg, stream_id, message)
+
+    async def _send_nodes_individually(self, nodes: list, stream_id: str, message: dict) -> None:
+        for node in nodes:
+            for segment in node:
+                if segment.get("type") == "text":
+                    await self._send_text(segment["data"]["text"], stream_id, message)
+                elif segment.get("type") == "image":
+                    await self._send_image(self._path_from_file_segment(segment), stream_id, message)
+                elif segment.get("type") == "video":
+                    sent = await send_video(message, self._path_from_file_segment(segment), self.config.api)
+                    if not sent:
+                        self.ctx.logger.warning("X video delivery failed")
+
+    async def _send_x_result(self, message: dict, result: ParseResult, stream_id: str) -> None:
+        settings = MediaSettings(**self.config.media_randomizer.model_dump())
+        context = MediaPrepareContext(self._x_media_root(), settings)
+        translation_task = None
+        try:
+            if result.extra.get("details_unavailable"):
+                translation = Translation("正文未获取，暂无法翻译", "unavailable")
+            else:
+                translation_task = asyncio.create_task(self._x_translator.translate(
+                    result.text or "", str(result.extra.get("source_language") or ""),
+                    self.config.twitter_translation, self.ctx.llm.generate,
+                    post_id=str(result.extra.get("tweet_id") or ""),
+                ))
+            media_nodes = []
+            failed = 0
+            image_count = 0
+            video_count = 0
+            for item in self._flatten_contents(result):
+                if isinstance(item, (ImageContent, GraphicsContent)) and self.config.parser.send_images:
+                    if image_count >= self.config.parser.max_images:
+                        continue
+                    image_count += 1
+                    try:
+                        source = await item.get_path()
+                        prepared = await context.prepare(source)
+                        await asyncio.to_thread(self._check_x_image_readable, prepared)
+                        media_nodes.append([image_segment(prepared)])
+                    except Exception as exc:
+                        failed += 1
+                        self.ctx.logger.warning("X image unavailable: %s", type(exc).__name__)
+                elif isinstance(item, (VideoContent, DynamicContent)) and self.config.parser.send_video:
+                    try:
+                        path = await item.get_path()
+                        await asyncio.to_thread(self._check_x_image_readable, path)
+                        media_nodes.append([video_segment(path)])
+                        video_count += 1
+                    except Exception as exc:
+                        failed += 1
+                        self.ctx.logger.warning("X video unavailable: %s", type(exc).__name__)
+            if translation_task:
+                translation = await translation_task
+            nodes = [[text_segment(text)] for text in post_text_nodes(result, translation)]
+            if failed:
+                nodes.append([text_segment(f"〔有 {failed} 个媒体未能下载〕")])
+            nodes.extend(media_nodes)
+            self.ctx.logger.info(
+                "X post ready: tweet_id=%s author=%s handle=%s translation=%s images=%d videos=%d prepared=%d",
+                result.extra.get("tweet_id"), result.author.name if result.author else "",
+                result.extra.get("author_handle"), translation.status, sum(node[0]["type"] == "image" for node in media_nodes), video_count, context.processed_count,
+            )
+            sent = False
+            if (self.config.parser.use_forward_for_multi or video_count) and len(nodes) > 1:
+                sent = await self._send_forward_via_sdk(nodes, stream_id, message)
+            if not sent:
+                await self._send_nodes_individually(nodes, stream_id, message)
+        finally:
+            if translation_task and not translation_task.done():
+                translation_task.cancel()
+                await asyncio.gather(translation_task, return_exceptions=True)
+            await context.cleanup()
+
+    @staticmethod
+    def _check_x_image_readable(path: Path) -> None:
+        with path.open("rb") as stream:
+            if not stream.read(1):
+                raise ValueError("empty image")
 
     async def _send_text(self, text: str, stream_id: str, message: dict[str, Any]) -> None:
         """通过 SDK 发送文本消息。SDK 失败或 stream_id 为空时回退到 OneBot HTTP。"""
@@ -407,30 +573,41 @@ class MultiPlatformParserPlugin(MaiBotPlugin):
             self.ctx.logger.warning("命令图片发送失败: %s", exc)
 
     async def _send_forward_via_sdk(self, nodes: list[list[dict[str, Any]]], stream_id: str, message: dict[str, Any]) -> bool:
-        """通过 SDK 发送合并转发消息，图片转为 base64。SDK 失败时回退到 OneBot HTTP。"""
+        """Serialize once, then use SDK forward nodes with OneBot HTTP fallback."""
+        try:
+            transport_nodes = await embed_local_media(nodes)
+        except Exception as exc:
+            self.ctx.logger.warning("合并转发媒体读取失败: %s", type(exc).__name__)
+            return False
         # 先尝试 SDK
         if stream_id:
             forward_messages: list[dict[str, Any]] = []
-            for node in nodes:
+            has_video = any(seg.get("type") == "video" for node in transport_nodes for seg in node)
+            for node in transport_nodes:
                 content: list[dict[str, Any]] = []
                 for seg in node:
                     if seg.get("type") == "image":
-                        path = self._path_from_file_segment(seg)
-                        image_b64 = await asyncio.to_thread(self._read_file_as_base64, path)
-                        content.append({"type": "image", "data": {"file": f"base64://{image_b64}"}})
+                        value = seg["data"]["file"]
+                        if value.startswith("base64://"):
+                            content.append({"type": "image", "binary_data_base64": value.removeprefix("base64://"), "data": ""})
+                        else:
+                            content.append({"type": "dict", "data": seg})
+                    elif seg.get("type") == "video":
+                        content.append({"type": "dict", "data": seg})
                     elif seg.get("type") == "text":
-                        content.append(seg)
+                        content.append({"type": "text", "data": seg["data"]["text"]})
                 forward_messages.append({
-                    "type": "node",
-                    "data": {
-                        "name": "麦麦解析",
-                        "uin": self.config.api.bot_uin or "10000",
-                        "content": content,
-                    },
+                    "nickname": "麦麦解析",
+                    "user_id": self.config.api.bot_uin or "10000",
+                    "segments": content,
                 })
 
             try:
-                result = await self.ctx.send.forward(forward_messages, stream_id)
+                result = await self.ctx.send.forward(
+                    forward_messages, stream_id,
+                    rpc_timeout_ms=300000 if has_video else 120000,
+                    storage_message=not has_video,
+                )
                 # 处理 bool 或 SendResult 返回值
                 sent = result if isinstance(result, bool) else bool(result.get("sent", False)) if isinstance(result, dict) else bool(result)
                 if sent:
@@ -441,7 +618,7 @@ class MultiPlatformParserPlugin(MaiBotPlugin):
 
         # 回退到 OneBot HTTP
         try:
-            return await send_group_forward(message, nodes, self.config.api)
+            return await send_group_forward(message, transport_nodes, self.config.api)
         except Exception as exc:
             self.ctx.logger.warning("OneBot HTTP 合并转发也失败: %s", exc)
             return False
@@ -613,17 +790,7 @@ class MultiPlatformParserPlugin(MaiBotPlugin):
         return contents
 
     def _message_source(self, message: dict[str, Any]) -> str:
-        parts = [str(message.get("processed_plain_text", "") or "")]
-        for seg in message.get("raw_message", []) or []:
-            if not isinstance(seg, dict):
-                continue
-            data = seg.get("data", {})
-            if isinstance(data, dict):
-                for key in ("url", "source_url", "jumpUrl", "content"):
-                    value = data.get(key)
-                    if value:
-                        parts.append(str(value))
-        return "\n".join(parts)
+        return message_source(message)
 
     def _resolve_self_id(self, message: dict[str, Any]) -> str | None:
         """尽力解析机器人自身在当前平台的用户ID。"""
@@ -685,32 +852,10 @@ class MultiPlatformParserPlugin(MaiBotPlugin):
         chain = await get_message(reply_id, self.config.api)
         if not chain:
             return ""
-        parts: list[str] = []
-        for seg in chain:
-            if not isinstance(seg, dict):
-                continue
-            data = seg.get("data", {}) if isinstance(seg.get("data"), dict) else {}
-            stype = str(seg.get("type", "") or "").lower()
-            if stype == "text":
-                value = data.get("text")
-                if value:
-                    parts.append(str(value))
-            else:
-                for key in ("url", "source_url", "jumpUrl", "content"):
-                    value = data.get(key)
-                    if value:
-                        parts.append(str(value))
-        return "\n".join(parts)
+        return message_source({"raw_message": chain})
 
     def _extract_urls(self, text: str) -> list[str]:
-        seen: set[str] = set()
-        urls: list[str] = []
-        for match in URL_RE.finditer(text):
-            url = match.group(0).rstrip(".,，。!！?？")
-            if url not in seen:
-                seen.add(url)
-                urls.append(url)
-        return urls
+        return extract_urls(text)
 
     def _is_allowed_group(self, message: dict[str, Any]) -> bool:
         group_id = self._get_group_id(message)

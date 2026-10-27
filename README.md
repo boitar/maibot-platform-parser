@@ -2,6 +2,50 @@
 
 自动解析 QQ 群里的多平台链接，并把图文或视频发送回群聊。
 
+## Custom 分支与本地调试
+
+本 fork 的维护分支为 `custom`，功能迭代从 `custom` 开始。`origin` 指向维护 fork，`upstream` 指向 `tidain/maibot-platform-parser`。上游更新保留为 merge 提交：
+
+```sh
+git switch custom
+git fetch upstream main
+git merge --no-ff upstream/main
+```
+
+有未提交改动时先检查和保存自己的改动，再处理冲突；不要把 `custom` 重置到上游，也不要 rebase 已有定制历史。
+
+本地调试使用 Python 3.11+ 同步当前工作区源码（包含未提交修复）到已经安装的同 ID 插件：
+
+```sh
+python3 scripts/dev_sync.py --maibot-dir ../Maibot
+python3 scripts/dev_sync.py --maibot-dir ../Maibot --apply
+```
+
+第一条只预览，第二条应用。同步会保留 `config.toml`、配置备份和用户文件，旧安装完整保存在 MaiBot 的 `data/local_plugin_backups/` 下。`.local-development.json` 记录本地来源、提交和文件哈希；运行中的内容来自最近一次同步，改完源码后需再次执行同步命令。调试期间通过该命令更新，市场更新仍会替换安装目录。
+
+MaiBot 检测源码变更后会重启插件运行进程，QQ 连接会短暂重连。同步输出只确认文件替换完成，加载结果需查看管理端状态和日志。图片和视频的单发及合并转发使用 Base64，避免 QQ 无法读取机器人缓存目录；发送结果同时校验 OneBot `status` 和 `retcode`，日志记录返回的消息 ID 供实收核对。
+
+回归测试使用 `aiohttp`、Pillow 和 MaiBot SDK，可直接使用已有 MaiBot 的 Python 环境运行：
+
+```sh
+../Maibot/.venv/bin/python -m unittest discover -s tests -v
+```
+
+### X 作者、原文、翻译与图片预处理
+
+- QQ 分享卡片优先使用完整跳转地址，支持原始 JSON 卡片、适配器文字及引用卡片。标题/摘要里带省略号的截断链接不会被当作短推文 ID；只有截断链接时会提示补发完整链接，避免串到其他推文。
+- 优先通过 FxTwitter 获取作者昵称、`@账号`、完整原文和媒体，兼容新旧返回结构。纯文字推文也可发送。详情不可用时使用 xdown 获取媒体，并明确标注作者/正文未获取。
+- 文字按“作者名(@账号) → 正文 → 中文译文”换行展示，不添加栏目标题和来源链接页脚。长文按顺序分段，X 原文不受通用 `max_text_chars = 700` 摘要限制；中文原文无需翻译时不追加重复提示。
+- X 视频推文始终优先使用合并转发，文字、图片及所有视频保持原顺序，普通多图转发开关不拆出视频。SDK 节点按 MaiBot 的格式构造，媒体一次编码后供 SDK 和 HTTP 回退复用；视频转发等待时间为 300 秒。
+- 合并转发失败后按原顺序逐条发送全部文字和媒体；单发视频也使用 Base64。SDK 发送含视频的转发时不把大型 Base64 副本写入聊天历史。
+- `[twitter_translation]` 默认开启，通过 MaiBot 的 `utils` 模型任务翻译为简体中文，独立调用且不携带聊天历史。中文原文无需翻译；空正文、模型超时和失败都有明确标记，原文及可用图片继续发送。
+- 成功译文按推文 ID、正文内容、目标语言和模型任务缓存，默认保留 24 小时、最多 256 条；插件或模型配置更新时清空缓存。失败结果不缓存。
+- `[media_randomizer]` 默认开启，仅处理 X 静态图片。六种策略的相对权重为重编码 30、加边框 20、裁边 15、扩展画布 15、边缘噪声 10、像素微调 10；每张图随机选一种可用策略，权重 0 表示禁用。
+- 默认边框 1–3 px、单边裁剪 1–2 px、画布宽高扩展 1–6 px；噪声作用于外圈 2 px，修改像素数不超过总像素的 0.1%。这些几何策略允许少量尺寸变化，有损重编码可能产生轻微画质变化。
+- JPEG、PNG、静态 WebP 按实际内容识别并保持编码格式，保留透明通道和无损 WebP 编码；GIF、动画 WebP、APNG 原样发送。预处理参考 `astrbot_plugin_link_resolver_x` 的行为，以独立模块接入 MaiBot。
+- 原缓存保持只读；同一次发送的相同图片按内容哈希只处理一次，SDK/HTTP/逐条回退复用处理后的副本，新一次发送重新随机选择。处理失败使用原图。
+- 副本存放在 MaiBot 为本插件分配的数据目录下 `temp/media_randomizer/`，默认发送结束即清理；启动和每 60 分钟清理超过 24 小时的残留，跳过活跃事务。配置字段及默认值见 `config.toml.example`。
+
 ## 迁移来源
 
 本插件是基于原 MaiBot 移植版的改进版本，解析核心迁移自 AstrBot 插件：
@@ -81,7 +125,9 @@
 
 > **注意**：SDK 发送失败时会在日志中输出 `SDK send.* 异常/返回 False，回退到 OneBot HTTP` 警告，便于排查问题。命令处理器（开启/关闭解析、B站登录）仅使用 SDK，失败时记录日志但不回退（命令场景无 message context 可用于 HTTP 回退）。
 
-> **关于 manifest 能力声明**：插件在 `_manifest.json` 中声明了 `send.text`、`send.image`、`send.forward` 三个 SDK 能力，覆盖文本、图片、合并转发三种消息类型。视频消息和文件上传因 SDK 暂不支持对应接口，直接通过 OneBot HTTP API 发送，**不受 manifest 能力声明约束**。这意味着插件实际具备的视频/文件发送能力超出了 manifest 声明范围，这是当前 SDK 能力限制下的折中方案。
+X 视频作为合并转发节点时可经 SDK 发送；上表的“视频消息”指独立视频消息，仍使用 OneBot HTTP。
+
+> **关于 manifest 能力声明**：插件在 `_manifest.json` 中声明了 `send.text`、`send.image`、`send.forward`、`llm.generate` 四个 SDK 能力，覆盖文本、图片、合并转发与 X 译文生成。视频消息和文件上传因 SDK 暂不支持对应接口，直接通过 OneBot HTTP API 发送，**不受 manifest 能力声明约束**。这意味着插件实际具备的视频/文件发送能力超出了 manifest 声明范围，这是当前 SDK 能力限制下的折中方案。
 
 ## 命令
 
@@ -149,7 +195,7 @@ metube_url = "http://127.0.0.1:8081"  # 自建 Metube 服务地址
 [more]
 pixiv_encrypt_image_group = true      # 群聊Pixiv图片混淆（仅R18/R18G作品，默认开启）
 pixiv_encrypt_image_private = false   # 私聊Pixiv图片混淆（仅R18/R18G作品，默认关闭）
-twitter_confirm_thirdparty = false    # Twitter第三方服务确认（推文链接会转发到xdown.app，开启表示知悉并同意）
+twitter_confirm_thirdparty = false    # Twitter第三方服务确认（推文 ID 会发送到 FxTwitter，媒体兜底时链接会转发到 xdown.app，开启表示知悉并同意）
 shipinhao_confirm_thirdparty = false  # 微信视频号第三方服务确认（分享链接会转发到腾讯元宝，开启表示知悉并同意）
 qzone_confirm_thirdparty = false      # QQ空间SnowLuma确认（通过SnowLuma获取登录态凭证，开启表示知悉并同意）
 metube_confirm = false                # Metube确认（链接提交到自建Metube服务，开启表示知悉并同意）
@@ -244,9 +290,10 @@ bot_uin = ""                # 发送合并转发节点时使用的 bot QQ
 - ffmpeg 调用使用固定命令模板，参数均为本地文件路径，不接受用户输入，风险较低。
 - **请确保系统已安装 ffmpeg 并可在 PATH 中找到**，否则视频解析功能将不可用。
 
-### xdown.app（Twitter/X 解析）
+### FxTwitter / xdown.app（Twitter/X 解析）
 
-- **重要提示**：Twitter/X 解析器（`core/parsers/twitter.py`）会将用户发送的推文链接转发到第三方服务 `xdown.app` 的 API（`https://xdown.app/api/ajaxSearch`）进行解析。
+- Twitter/X 解析器（`core/parsers/twitter.py`）优先将推文 ID 发送至第三方服务 FxTwitter（`https://api.fxtwitter.com/2/status/{id}`），获取作者、正文及媒体。详情获取失败时，原链接才会发送至 xdown（`https://xdown.app/api/ajaxSearch`）获取媒体。
+- 默认翻译会将原文发送给 MaiBot `utils` 任务配置的模型服务；可在 `[twitter_translation]` 中关闭或修改任务。
 - 这意味着推文链接会被发送到第三方服务器，请评估是否可接受此外部数据流转。
 - **二次确认机制**：即使 `enable_twitter = true`，还必须额外开启 `twitter_confirm_thirdparty = true` 才会实际解析 Twitter 链接。这是强制性的知情同意机制，确保用户明确知悉推文链接会被转发到第三方服务。关闭时会在日志中输出警告。
 

@@ -37,3 +37,13 @@
   `metube_confirm = true` before it is activated.
 
 The original MIT license text is included in `LICENSE`.
+
+## FxTwitter (X post data service)
+
+- Source and API documentation: https://github.com/FxEmbed/FxEmbed
+- The X parser requests public post details by post ID from FxTwitter. It does not forward
+  xdown cookies to FxTwitter. The existing xdown API remains a media fallback.
+- X image preparation follows the observable six-strategy behavior of
+  `boitar/astrbot_plugin_link_resolver_x`, implemented here with Pillow and MaiBot runtime paths.
+- Translation uses the model service configured by the MaiBot host, through the declared
+  `llm.generate` capability; no AstrBot runtime or account configuration is imported.

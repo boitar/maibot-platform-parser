@@ -1,7 +1,7 @@
 [plugin]
 name = "multi_platform_parser"
-config_version = "1.7.4"
-version = "1.7.4"
+config_version = "1.8.0"
+version = "1.8.0"
 enabled = true
 admin_qqs = []
 
@@ -45,7 +45,7 @@ metube_url = "http://127.0.0.1:8081"  # 自建 Metube 服务地址
 [more]
 pixiv_encrypt_image_group = true      # 群聊Pixiv图片混淆（仅R18/R18G作品，默认开启）
 pixiv_encrypt_image_private = false   # 私聊Pixiv图片混淆（仅R18/R18G作品，默认关闭）
-twitter_confirm_thirdparty = false    # Twitter第三方服务确认（推文链接会转发到xdown.app，开启表示知悉并同意）
+twitter_confirm_thirdparty = false    # Twitter第三方服务确认（推文 ID 会发送到 FxTwitter，媒体兜底时链接会转发到 xdown.app，开启表示知悉并同意）
 shipinhao_confirm_thirdparty = false  # 微信视频号第三方服务确认（分享链接会转发到腾讯元宝，开启表示知悉并同意）
 qzone_confirm_thirdparty = false      # QQ空间SnowLuma确认（通过SnowLuma获取登录态凭证，开启表示知悉并同意）
 metube_confirm = false                # Metube确认（链接提交到自建Metube服务，开启表示知悉并同意）
@@ -102,3 +102,44 @@ host = "127.0.0.1"
 port = 3000
 token = ""
 bot_uin = ""
+
+[twitter_translation]
+enabled = true
+target_language = "zh-CN"
+task_name = "utils"
+timeout_seconds = 25
+chunk_chars = 1600
+cache_ttl_seconds = 86400
+cache_max_entries = 256
+
+[media_randomizer]
+enabled = true
+cleanup_after_send = true
+cleanup_interval_minutes = 60
+cleanup_retention_hours = 24
+weight_reencode = 30
+weight_border = 20
+weight_crop = 15
+weight_canvas = 15
+weight_edge_noise = 10
+weight_pixel_noise = 10
+jpeg_quality = 95
+webp_quality = 95
+png_compress_level = 6
+border_min_px = 1
+border_max_px = 3
+crop_min_px = 1
+crop_max_px = 2
+canvas_min_px = 1
+canvas_max_px = 6
+noise_region_px = 2
+edge_noise_min_count = 2
+edge_noise_max_count = 20
+pixel_noise_min_count = 5
+pixel_noise_max_count = 30
+pixel_noise_delta_min = 1
+pixel_noise_delta_max = 3
+max_modified_ratio = 0.001
+border_color = "随机黑白"
+canvas_background = "随机黑白"
+noise_color = "随机黑白"
